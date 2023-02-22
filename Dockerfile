@@ -1,6 +1,6 @@
-ARG NEON_EVM_COMMIT
+ARG NEON_EVM_COMMIT=latest
 
-FROM neonlabsorg/evm_loader:${NEON_EVM_COMMIT} AS spl
+FROM us-central1-docker.pkg.dev/eclipse-362422/eclipse-docker-apps/neon-evm:${NEON_EVM_COMMIT} AS spl
 FROM neonlabsorg/neon_test_invoke_program:develop AS neon_test_invoke_program
 
 FROM ubuntu:20.04
@@ -52,7 +52,8 @@ COPY --from=neon_test_invoke_program \
     /opt/neon_test_invoke_program-keypair.json \
     /spl/bin/
 
-COPY proxy/operator-keypairs/id.json /root/.config/solana/
+RUN mkdir -p /root/.config/solana
+#COPY proxy/operator-keypairs/id.json /root/.config/solana/
 
 COPY . /opt
 ARG PROXY_REVISION
