@@ -36,7 +36,8 @@ COPY --from=spl /opt/contracts/contracts/ /opt/contracts/
 COPY --from=spl /opt/neon-cli /spl/bin/emulator
 COPY --from=neon_test_invoke_program /opt/neon_test_invoke_program-keypair.json /spl/bin/
 
-COPY proxy/operator-keypairs/id.json /root/.config/solana/
+RUN mkdir -p /root/.config/solana
+#COPY proxy/operator-keypairs/id.json /root/.config/solana/
 
 COPY . /opt
 ARG PROXY_REVISION

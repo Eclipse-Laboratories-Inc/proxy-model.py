@@ -56,6 +56,7 @@ fi
 [[ -z "$EVM_LOADER" ]] && echo "$(date "+%F %X.%3N") E $(basename $0):${LINENO} $$ ${COMPONENT}:StartScript {} EVM_LOADER is not set" && exit 1
 
 solana config set -u $SOLANA_URL
+echo "$NEON_OPERATOR_KEYPAIR" > "$HOME/.config/solana/id.json"
 
 isArg() { case "$1" in "$2"|"$2="*) true;; *) false;; esac }
 EXTRA_ARGS_TIMEOUT=' --timeout 300'
