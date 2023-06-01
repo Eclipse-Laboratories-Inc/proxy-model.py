@@ -10,15 +10,15 @@ import logging
 import base58
 import requests
 
-from ..common_neon.address import NeonAddress, neon_2program
-from ..common_neon.config import Config
-from ..common_neon.constants import NEON_ACCOUNT_TAG
-from ..common_neon.errors import SolanaUnavailableError
-from ..common_neon.layouts import ACCOUNT_INFO_LAYOUT
-from ..common_neon.solana_tx import SolTx, SolBlockHash, SolPubKey, SolCommit
-from ..common_neon.solana_tx_error_parser import SolTxErrorParser
-from ..common_neon.utils import SolBlockInfo
-from ..common_neon.layouts import HolderAccountInfo, AccountInfo, NeonAccountInfo, ALTAccountInfo
+from .address import NeonAddress, neon_2program
+from .config import Config
+from .constants import NEON_ACCOUNT_TAG
+from .errors import SolanaUnavailableError
+from .layouts import ACCOUNT_INFO_LAYOUT
+from .solana_tx import SolTx, SolBlockHash, SolPubKey, SolCommit
+from .solana_tx_error_parser import SolTxErrorParser
+from .utils import SolBlockInfo
+from .layouts import HolderAccountInfo, AccountInfo, NeonAccountInfo, ALTAccountInfo
 
 
 LOG = logging.getLogger(__name__)
@@ -162,7 +162,7 @@ class SolInteractor:
         status = response.get('result', None)
         if status == 'ok':
             return 0
-        slots_behind = SolTxErrorParser(response).get_slots_behind()
+        slots_behind = SolTxErrorParser(self._config.evm_program_id, response).get_slots_behind()
         if slots_behind is not None:
             return int(slots_behind)
         return None
@@ -321,21 +321,26 @@ class SolInteractor:
 
         return balances_list
 
-    def get_neon_account_info(self, eth_account: Union[str, NeonAddress],
+    def get_neon_account_info(self, neon_account: Union[str, bytes, NeonAddress],
                               commitment=SolCommit.Confirmed) -> Optional[NeonAccountInfo]:
-        if isinstance(eth_account, str):
-            eth_account = NeonAddress(eth_account)
-        account_sol, nonce = neon_2program(eth_account)
+        if not isinstance(neon_account, NeonAddress):
+            neon_account = NeonAddress(neon_account)
+        account_sol, nonce = neon_2program(self._config.evm_program_id, neon_account)
         info = self.get_account_info(account_sol, commitment=commitment)
         if info is None:
             return None
+
         return NeonAccountInfo.from_account_info(info)
+
+    def get_state_tx_cnt(self, neon_account: Union[str, bytes, NeonAddress], commitment=SolCommit.Confirmed) -> int:
+        neon_account_info = self.get_neon_account_info(neon_account, commitment)
+        return neon_account_info.tx_count if neon_account_info is not None else 0
 
     def get_neon_account_info_list(self, neon_account_list: List[Union[NeonAddress, str]],
                                    commitment=SolCommit.Confirmed) -> List[Optional[NeonAccountInfo]]:
         requests_list = list()
         for neon_account in neon_account_list:
-            account_sol, _nonce = neon_2program(neon_account)
+            account_sol, _nonce = neon_2program(self._config.evm_program_id, neon_account)
             requests_list.append(account_sol)
         responses_list = self.get_account_info_list(requests_list, commitment=commitment)
         accounts_list = list()
@@ -499,7 +504,7 @@ class SolInteractor:
 
             error = response.get('error', None)
             if error:
-                if SolTxErrorParser(error).check_if_already_processed():
+                if SolTxErrorParser(self._config.evm_program_id, error).check_if_already_processed():
                     result = str(tx.sig)
                     LOG.debug(f'Transaction is already processed: {str(result)}')
                     error = None

@@ -1,5 +1,6 @@
 import struct
 import logging
+
 from decimal import Decimal
 from typing import List, Union, Dict, Any, Optional, Tuple
 
@@ -51,7 +52,7 @@ def unpack(layout_descriptor: Dict[str, Any],
     if start_idx >= len(raw_data) or stop_idx > len(raw_data):
         raise Exception(
             f"Field '{field_name}': Index overflow: len(raw_data) = {len(raw_data)}, "
-            f"start_idx = {start_idx}, stop_idx = {stop_idx}"""
+            f"start_idx = {start_idx}, stop_idx = {stop_idx}"
         )
 
     if field['format'] == 'acc':  # special case for Solana account address

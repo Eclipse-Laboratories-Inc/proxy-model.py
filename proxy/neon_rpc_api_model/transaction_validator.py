@@ -2,30 +2,30 @@ from __future__ import annotations
 
 from typing import Dict, Any
 
-from ..common_neon.address import NeonAddress
 from ..common_neon.config import Config
 from ..common_neon.data import NeonTxExecCfg, NeonEmulatedResult
 from ..common_neon.elf_params import ElfParams
 from ..common_neon.emulator_interactor import call_tx_emulated, check_emulated_exit_status
-from ..common_neon.errors import EthereumError
-from ..common_neon.estimate import GasEstimate
-from ..common_neon.eth_proto import NeonTx
+from ..common_neon.errors import EthereumError, NonceTooLowError
+from ..common_neon.utils.eth_proto import NeonTx
 from ..common_neon.solana_interactor import SolInteractor
 from ..common_neon.solana_tx_error_parser import SolTxErrorParser
 
+from .estimate import GasEstimate
+
 
 class NeonTxValidator:
-    max_u64 = 2 ** 64 - 1
-    max_u256 = 2 ** 256 - 1
+    _max_u64 = 2 ** 64 - 1
+    _max_u256 = 2 ** 256 - 1
 
-    def __init__(self, config: Config, solana: SolInteractor, tx: NeonTx, min_gas_price: int):
-        self._solana = solana
+    def __init__(self, config: Config, solana: SolInteractor, tx: NeonTx, gas_less_permit: bool, min_gas_price: int):
         self._config = config
+        self._solana = solana
         self._tx = tx
 
-        self._neon_account_info = self._solana.get_neon_account_info(NeonAddress(self._tx.sender))
-        self._state_tx_cnt = self._neon_account_info.tx_count if self._neon_account_info is not None else 0
+        self._neon_account_info = solana.get_neon_account_info(self._tx.sender)
 
+        self._has_gas_less_permit = gas_less_permit
         self._min_gas_price = min_gas_price
         self._estimated_gas = 0
 
@@ -39,7 +39,7 @@ class NeonTxValidator:
 
         no_chainid_gas_limit_multiplier = ElfParams().neon_gas_limit_multiplier_no_chainid
         tx_gas_limit = self._tx_gas_limit * no_chainid_gas_limit_multiplier
-        if self.max_u64 > tx_gas_limit:
+        if self._max_u64 > tx_gas_limit:
             self._tx_gas_limit = tx_gas_limit
 
     def is_underpriced_tx_wo_chainid(self) -> bool:
@@ -53,14 +53,17 @@ class NeonTxValidator:
             emulated_result: NeonEmulatedResult = call_tx_emulated(self._config, self._tx)
             self.prevalidate_emulator(emulated_result)
 
-            neon_tx_exec_cfg = NeonTxExecCfg().set_emulated_result(emulated_result).set_state_tx_cnt(self._state_tx_cnt)
+            state_tx_cnt = 0
+            if self._neon_account_info is not None:
+                state_tx_cnt = self._neon_account_info.tx_count
+
+            neon_tx_exec_cfg = NeonTxExecCfg().set_emulated_result(emulated_result).set_state_tx_cnt(state_tx_cnt)
             return neon_tx_exec_cfg
         except BaseException as exc:
             self.extract_ethereum_error(exc)
             raise
 
     def _prevalidate_tx(self):
-        self._prevalidate_tx_nonce()
         self._prevalidate_sender_eoa()
         self._prevalidate_tx_gas()
         self._prevalidate_tx_chain_id()
@@ -77,26 +80,29 @@ class NeonTxValidator:
         self._prevalidate_account_cnt(emulator_json)
 
     def extract_ethereum_error(self, e: BaseException):
-        receipt_parser = SolTxErrorParser(e)
+        receipt_parser = SolTxErrorParser(self._config.evm_program_id, e)
         state_tx_cnt, tx_nonce = receipt_parser.get_nonce_error()
-        if state_tx_cnt is not None:
-            self.raise_nonce_error(state_tx_cnt, tx_nonce)
+        NonceTooLowError.raise_if_error(self._tx.hex_sender, tx_nonce, state_tx_cnt)
 
     def _prevalidate_tx_gas(self):
-        if self._tx_gas_limit > self.max_u64:
+        if self._tx_gas_limit > self._max_u64:
             raise EthereumError(message='gas uint64 overflow')
-        if (self._tx_gas_limit * self._tx.gasPrice) > (self.max_u256 - 1):
+        if (self._tx_gas_limit * self._tx.gasPrice) > (self._max_u256 - 1):
             raise EthereumError(message='max fee per gas higher than 2^256-1')
 
         # Operator can set minimum gas price to accept txs into mempool
         if self._tx.gasPrice >= self._config.min_gas_price:
             return
 
+        # Gas-less transaction
+        if (self._tx.gasPrice == 0) and self._has_gas_less_permit:
+            return
+
         if self._config.allow_underpriced_tx_wo_chainid:
             if (not self._tx.has_chain_id()) and (self._tx.gasPrice >= self._config.min_wo_chainid_gas_price):
                 return
 
-        raise EthereumError(f"transaction underpriced: have {self._tx.gasPrice} want {self._config.min_gas_price}")
+        raise EthereumError(f'transaction underpriced: have {self._tx.gasPrice} want {self._config.min_gas_price}')
 
     def _prevalidate_tx_chain_id(self):
         if self._tx.chain_id() not in (None, ElfParams().chain_id):
@@ -105,17 +111,6 @@ class NeonTxValidator:
     def _prevalidate_tx_size(self):
         if len(self._tx.callData) > (128 * 1024 - 1024):
             raise EthereumError(message='transaction size is too big')
-
-    def _prevalidate_tx_nonce(self):
-        tx_nonce = int(self._tx.nonce)
-        if self.max_u64 in (self._state_tx_cnt, tx_nonce):
-            sender = self._tx.hex_sender
-            raise EthereumError(
-                code=-32002,
-                message=f'nonce has max value: address {sender}, tx: {tx_nonce} state: {self._state_tx_cnt}'
-            )
-        if self._state_tx_cnt > tx_nonce:
-            self.raise_nonce_error(self._state_tx_cnt, tx_nonce)
 
     def _prevalidate_sender_eoa(self):
         if not self._neon_account_info:
@@ -186,14 +181,3 @@ class NeonTxValidator:
         )
         if account_cnt > self._config.max_tx_account_cnt:
             raise EthereumError(f"transaction requires too lot of accounts {account_cnt}")
-
-    def raise_nonce_error(self, state_tx_cnt: int, tx_nonce: int):
-        if state_tx_cnt > tx_nonce:
-            message = 'nonce too low'
-        else:
-            message = 'nonce too high'
-
-        raise EthereumError(
-            code=-32002,
-            message=f'{message}: address {self._tx.hex_sender}, tx: {tx_nonce} state: {state_tx_cnt}'
-        )

@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import time
 import logging
-import dataclasses
 
 from collections import deque
 from dataclasses import dataclass
@@ -12,7 +11,7 @@ from typing import Iterator, List, Optional, Dict, Set, Deque, Tuple, cast
 
 from ..common_neon.config import Config
 from ..common_neon.solana_neon_tx_receipt import SolTxMetaInfo, SolNeonIxReceiptInfo, SolTxCostInfo, SolTxReceiptInfo
-from ..common_neon.evm_log_decoder import NeonLogTxEvent
+from ..common_neon.utils.evm_log_decoder import NeonLogTxEvent
 from ..common_neon.utils import NeonTxResultInfo, NeonTxInfo, NeonTxReceiptInfo, SolBlockInfo, str_fmt_object
 from ..indexer.solana_tx_meta_collector import SolTxMetaCollector
 
@@ -365,6 +364,7 @@ class NeonIndexedBlockInfo:
         if sol_sig in self._sol_sig_set:
             return False
         self._sol_sig_set.add(sol_sig)
+        return True
 
     def find_neon_tx_holder(self, account: str, sol_neon_ix: SolNeonIxReceiptInfo) -> Optional[NeonIndexedHolderInfo]:
         key = NeonIndexedHolderInfo.Key(account, sol_neon_ix.neon_tx_sig)
@@ -403,7 +403,7 @@ class NeonIndexedBlockInfo:
                     holder_account: str, iter_blocked_account: Iterator[str],
                     sol_neon_ix: SolNeonIxReceiptInfo) -> NeonIndexedTxInfo:
         key = NeonIndexedTxInfo.Key(sol_neon_ix)
-        assert key.value not in self._neon_tx_dict, 'the tx {key} already in use!'
+        assert key.value not in self._neon_tx_dict, f'the tx {key} already in use!'
 
         tx = NeonIndexedTxInfo(tx_type, key, neon_tx, holder_account, iter_blocked_account)
         tx.add_sol_neon_ix(sol_neon_ix)
@@ -680,9 +680,11 @@ class SolNeonTxDecoderState:
     #           for solana_ix in solana_tx.solana_ix_list:
     #               solana_ix.level <- level in stack of calls
     #  ....
-    def __init__(self, sol_tx_meta_collector: SolTxMetaCollector,
+    def __init__(self, config: Config,
+                 sol_tx_meta_collector: SolTxMetaCollector,
                  start_block_slot: int,
                  neon_block: Optional[NeonIndexedBlockInfo]):
+        self._config = config
         self._start_time = time.time()
         self._init_block_slot = start_block_slot
         self._start_block_slot = start_block_slot
@@ -791,9 +793,10 @@ class SolNeonTxDecoderState:
     def iter_sol_neon_ix(self) -> Iterator[SolNeonIxReceiptInfo]:
         assert self._sol_tx_meta is not None
 
+        evm_program_id = self._config.evm_program_id
         try:
             self._sol_tx = SolTxReceiptInfo.from_tx_meta(self._sol_tx_meta)
-            for self._sol_neon_ix in self._sol_tx.iter_sol_neon_ix():
+            for self._sol_neon_ix in self._sol_tx.iter_sol_ix(evm_program_id):
                 self._sol_neon_ix_cnt += 1
                 yield self._sol_neon_ix
         finally:

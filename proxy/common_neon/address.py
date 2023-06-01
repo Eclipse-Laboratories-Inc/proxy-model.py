@@ -5,17 +5,15 @@ import random
 
 from typing import Tuple, Union
 
+from eth_keys import keys as neon_keys
 from sha3 import keccak_256
 
-from eth_keys import keys as neon_keys
-
-from ..common_neon.solana_tx import SolPubKey
-from ..common_neon.constants import ACCOUNT_SEED_VERSION
-from ..common_neon.environment_data import EVM_LOADER_ID
+from .constants import ACCOUNT_SEED_VERSION
+from .solana_tx import SolPubKey
 
 
 class NeonAddress:
-    def __init__(self, data, private: neon_keys.PrivateKey = None):
+    def __init__(self, data: Union[str, bytes], private: neon_keys.PrivateKey = None):
         if isinstance(data, str):
             data = bytes(bytearray.fromhex(data[2:]))
         self.data = data
@@ -52,9 +50,9 @@ class NeonAddress:
         return self.data != other.data
 
 
-def account_with_seed(base_address: SolPubKey, seed: bytes) -> SolPubKey:
+def account_with_seed(program_id: SolPubKey, base_address: SolPubKey, seed: bytes) -> SolPubKey:
     seed_str = str(seed, 'utf8')
-    result = SolPubKey.create_with_seed(base_address, seed_str, SolPubKey.from_string(EVM_LOADER_ID))
+    result = SolPubKey.create_with_seed(base_address, seed_str, program_id)
     return result
 
 
@@ -65,7 +63,7 @@ def perm_account_seed(prefix: bytes, resource_id: int) -> bytes:
     return bytes(seed, 'utf8')
 
 
-def neon_2program(neon: Union[NeonAddress, str, bytes]) -> Tuple[SolPubKey, int]:
+def neon_2program(program_id: SolPubKey, neon: Union[NeonAddress, str, bytes]) -> Tuple[SolPubKey, int]:
     if isinstance(neon, NeonAddress):
         neon = bytes(neon)
     elif isinstance(neon, str):
@@ -74,5 +72,5 @@ def neon_2program(neon: Union[NeonAddress, str, bytes]) -> Tuple[SolPubKey, int]
         neon = bytes.fromhex(neon)
 
     seed = [ACCOUNT_SEED_VERSION, neon]
-    (pda, nonce) = SolPubKey.find_program_address(seed, SolPubKey.from_string(EVM_LOADER_ID))
+    (pda, nonce) = SolPubKey.find_program_address(seed, program_id)
     return pda, nonce

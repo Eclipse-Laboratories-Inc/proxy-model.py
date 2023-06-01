@@ -4,21 +4,23 @@ import os
 from decimal import Decimal
 from typing import Optional
 
-from ..common_neon.environment_data import EVM_LOADER_ID
-from ..common_neon.solana_tx import SolPubKey, SolCommit
+from .db.db_config import DBConfig
+from .environment_data import EVM_LOADER_ID
+from .solana_tx import SolPubKey, SolCommit
 
 
-class Config:
+class Config(DBConfig):
     _one_block_sec = 0.4
     _min_finalize_sec = _one_block_sec * 32
 
     def __init__(self):
+        super().__init__()
         self._solana_url = os.environ.get("SOLANA_URL", "http://localhost:8899")
         self._pp_solana_url = os.environ.get("PP_SOLANA_URL", self._solana_url)
-        self._evm_loader_id = SolPubKey.from_string(EVM_LOADER_ID)
+        self._evm_program_id = SolPubKey.from_string(EVM_LOADER_ID)
         self._mempool_capacity = self._env_int("MEMPOOL_CAPACITY", 10, 4096)
         self._mempool_executor_limit_cnt = self._env_int('MEMPOOL_EXECUTOR_LIMIT_CNT', 4, 1024)
-        self._mempool_cache_life_sec = self._env_int('MEMPOOL_CACHE_LIFE_SEC', 15, 15 * 60)
+        self._mempool_cache_life_sec = self._env_int('MEMPOOL_CACHE_LIFE_SEC', 15, 30 * 60)
         self._accept_reverted_tx_into_mempool = self._env_bool('ACCEPT_REVERTED_TX_INTO_MEMPOOL', False)
         self._holder_size = self._env_int("HOLDER_SIZE", 1024, 131072)  # 128*1024
         self._min_op_balance_to_warn = self._env_int("MIN_OPERATOR_BALANCE_TO_WARN", 9000000000, 9000000000)
@@ -39,6 +41,8 @@ class Config:
         self._gas_price_suggested_pct = self._env_decimal("GAS_PRICE_SUGGEST_PCT", "0.01")
         self._min_gas_price = self._env_int("MINIMAL_GAS_PRICE", 0, 1) * (10 ** 9)
         self._min_wo_chainid_gas_price = self._env_int("MINIMAL_WO_CHAINID_GAS_PRICE", 0, 10) * (10 ** 9)
+        self._gas_less_tx_max_nonce = self._env_int("GAS_LESS_MAX_TX_NONCE", 0, 5)
+        self._gas_less_tx_max_gas = self._env_int("GAS_LESS_MAX_GAS", 0, 20_000_000)  # Estimated gas on Mora = 18 mln
         self._neon_price_usd = Decimal('0.25')
         self._neon_decimals = self._env_int('NEON_DECIMALS', 1, 9)
         self._start_slot = os.environ.get('START_SLOT', '0')
@@ -63,6 +67,7 @@ class Config:
         self._hvac_path = os.environ.get('HVAC_PATH', '')
         self._genesis_timestamp = self._env_int('GENESIS_BLOCK_TIMESTAMP', 0, 0)
         self._commit_level = os.environ.get('COMMIT_LEVEL', SolCommit.Confirmed)
+        self._ch_dsn_list = os.environ.get('CLICKHOUSE_DSN_LIST', '')
 
         pyth_mapping_account = os.environ.get('PYTH_MAPPING_ACCOUNT', None)
         if pyth_mapping_account is not None:
@@ -94,6 +99,14 @@ class Config:
     @staticmethod
     def _env_decimal(name: str, default_value: str) -> Decimal:
         return Decimal(os.environ.get(name, default_value))
+
+    @property
+    def one_block_sec(self) -> float:
+        return self._one_block_sec
+
+    @property
+    def min_finalize_sec(self) -> float:
+        return self._min_finalize_sec
 
     @property
     def solana_url(self) -> str:
@@ -128,8 +141,8 @@ class Config:
         return self._pp_solana_url
 
     @property
-    def evm_loader_id(self) -> SolPubKey:
-        return self._evm_loader_id
+    def evm_program_id(self) -> SolPubKey:
+        return self._evm_program_id
 
     @property
     def holder_size(self) -> int:
@@ -189,7 +202,7 @@ class Config:
 
     @property
     def slot_processing_delay(self) -> int:
-        """Slot processing delay relative to the last confirmed slot on Solana cluster"""
+        """Slot processing delay relative to the last confirmed slot on Tracer API node"""
         return self._slot_processing_delay
 
     @property
@@ -198,13 +211,21 @@ class Config:
 
     @property
     def min_gas_price(self) -> int:
-        """Minimal gas price to accept into the mempool"""
+        """Minimal gas price to accept tx into the mempool"""
         return self._min_gas_price
 
     @property
     def min_wo_chainid_gas_price(self) -> int:
         """Minimal gas price for txs without chain-id"""
         return self._min_wo_chainid_gas_price
+
+    @property
+    def gas_less_tx_max_nonce(self) -> int:
+        return self._gas_less_tx_max_nonce
+
+    @property
+    def gas_less_tx_max_gas(self) -> int:
+        return self._gas_less_tx_max_gas
 
     @property
     def neon_price_usd(self) -> Decimal:
@@ -302,11 +323,13 @@ class Config:
     def commit_level(self) -> SolCommit.Type:
         return self._commit_level
 
+    @property
+    def ch_dsn_list(self) -> str:
+        return self._ch_dsn_list
+
     def as_dict(self) -> dict:
-        return {
-            'SOLANA_URL': self.solana_url,
-            'EVM_LOADER_ID': str(self.evm_loader_id),
-            'PP_SOLANA_URL': self.pyth_solana_url,
+        config_dict = {
+            'EVM_LOADER_ID': str(self.evm_program_id),
             'PYTH_MAPPING_ACCOUNT': str(self.pyth_mapping_account),
             'UPDATE_PYTH_MAPPING_PERIOD_SEC': self.update_pyth_mapping_period_sec,
             'MEMPOOL_CAPACITY': self.mempool_capacity,
@@ -331,6 +354,8 @@ class Config:
             'GAS_PRICE_SUGGEST_PCT': self.gas_price_suggested_pct,
             'MINIMAL_GAS_PRICE': self.min_gas_price,
             'MINIMAL_WO_CHAINID_GAS_PRICE': self.min_wo_chainid_gas_price,
+            'GAS_LESS_MAX_TX_NONCE': self.gas_less_tx_max_nonce,
+            'GAS_LESS_MAX_GAS': self.gas_less_tx_max_gas,
             'NEON_PRICE_USD': self.neon_price_usd,
             'NEON_DECIMALS': self.neon_decimals,
             'START_SLOT': self.start_slot,
@@ -349,10 +374,21 @@ class Config:
             'SKIP_CANCEL_TIMEOUT': self.skip_cancel_timeout,
             'HOLDER_TIMOUT': self.holder_timeout,
             'GATHER_STATISTICS': self.gather_statistics,
-            'HVAC_URL': self.hvac_url,
-            'HVAC_TOKEN': self.hvac_token,
-            'HVAC_PATH': self.hvac_path,
-            'HVAC_MOUNT': self.hvac_mount,
+
             'GENESIS_BLOCK_TIMESTAMP': self.genesis_timestamp,
-            'COMMIT_LEVEL': self.commit_level
+            'COMMIT_LEVEL': self.commit_level,
+
+            # Don't print accesses to the logs
+
+            # 'SOLANA_URL': self.solana_url,
+            # 'PP_SOLANA_URL': self.pyth_solana_url,
+
+            # 'HVAC_URL': self.hvac_url,
+            # 'HVAC_TOKEN': self.hvac_token,
+            # 'HVAC_PATH': self.hvac_path,
+            # 'HVAC_MOUNT': self.hvac_mount,
+
+            # 'CLICKHOUSE_DSN_LIST': self.ch_dsn_list,
         }
+        config_dict.update(super().as_dict())
+        return config_dict

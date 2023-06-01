@@ -5,7 +5,7 @@ from .operator_resource_mng import OpResInfo
 
 from ..common_neon.config import Config
 from ..common_neon.data import NeonTxExecCfg, NeonAccountDict, NeonEmulatedResult
-from ..common_neon.eth_proto import NeonTx
+from ..common_neon.utils.eth_proto import NeonTx
 from ..common_neon.neon_instruction import NeonIxBuilder
 from ..common_neon.solana_interactor import SolInteractor
 from ..common_neon.solana_tx import SolTx, SolPubKey, SolAccountMeta, SolAccount
@@ -24,7 +24,7 @@ class NeonTxSendCtx:
         self._solana = solana
         self._resource = resource
 
-        self._ix_builder = NeonIxBuilder(resource.public_key)
+        self._ix_builder = NeonIxBuilder(config, resource.public_key)
         self._ix_builder.init_operator_neon(self._resource.neon_address)
         self._ix_builder.init_neon_tx(self._neon_tx)
         self._ix_builder.init_iterative(self._resource.holder)

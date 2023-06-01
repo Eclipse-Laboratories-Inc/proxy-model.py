@@ -119,11 +119,8 @@ class BaseNeonTxStrategy(abc.ABC):
         yield from tx_list_list
 
     def _validate_tx_size(self) -> bool:
-        if self._build_tx().has_valid_size(self._ctx.signer):
-            return True
-
-        _validation_error_msg = 'Transaction size is exceeded'
-        return False
+        self._build_tx().validate(self._ctx.signer)  # <- there will be exception
+        return True
 
     def _validate_tx_has_chainid(self) -> bool:
         if self._ctx.neon_tx.has_chain_id():
@@ -166,10 +163,9 @@ class BaseNeonTxStrategy(abc.ABC):
             ]
         )
 
-    @staticmethod
-    def _find_sol_neon_ix(tx_send_state: SolTxSendState) -> Optional[SolNeonIxReceiptInfo]:
+    def _find_sol_neon_ix(self, tx_send_state: SolTxSendState) -> Optional[SolNeonIxReceiptInfo]:
         tx_receipt_info = SolTxReceiptInfo.from_tx_receipt(tx_send_state.receipt)
-        for sol_neon_ix in tx_receipt_info.iter_sol_neon_ix():
+        for sol_neon_ix in tx_receipt_info.iter_sol_ix(self._ctx.config.evm_program_id):
             return sol_neon_ix
         return None
 
