@@ -2,6 +2,7 @@ import os
 import re
 import time
 import sys
+
 import docker
 import subprocess
 import pathlib
@@ -12,6 +13,7 @@ from urllib.parse import urlparse
 from python_terraform import Terraform
 from paramiko import SSHClient
 from scp import SCPClient
+from github_api_client import GithubClient
 
 try:
     import click
@@ -62,6 +64,10 @@ def docker_compose(args: str):
     command = f'docker-compose {args}'
     click.echo(f"run command: {command}")
     out = subprocess.run(command, shell=True)
+    click.echo("return code: " + str(out.returncode))
+    if out.returncode != 0:
+        raise RuntimeError(f"Command {command} failed. Err: {out.stderr}")
+
     return out
 
 
@@ -73,15 +79,23 @@ def check_neon_evm_tag(tag):
             f"evm_loader image with {tag} tag isn't found. Response: {response.json()}")
 
 
-def update_neon_evm_tag_if_same_branch_exists(branch, neon_evm_tag):
-    if branch != "":
+def is_neon_evm_branch_exist(branch):
+    if branch:
         proxy_branches_obj = requests.get(
             "https://api.github.com/repos/neonlabsorg/neon-evm/branches?per_page=100").json()
         proxy_branches = [item["name"] for item in proxy_branches_obj]
+
         if branch in proxy_branches:
             click.echo(f"The same branch {branch} is found in neon_evm repository")
-            neon_evm_tag = branch.split('/')[-1]
-            check_neon_evm_tag(neon_evm_tag)
+            return True
+    else:
+        return False
+
+
+def update_neon_evm_tag_if_same_branch_exists(branch, neon_evm_tag):
+    if is_neon_evm_branch_exist(branch):
+        neon_evm_tag = branch.split('/')[-1]
+        check_neon_evm_tag(neon_evm_tag)
     return neon_evm_tag
 
 
@@ -91,8 +105,7 @@ def update_neon_evm_tag_if_same_branch_exists(branch, neon_evm_tag):
 @click.option('--head_ref_branch')
 @click.option('--skip_pull', is_flag=True, default=False, help="skip pulling of docker images from the docker-hub")
 def build_docker_image(neon_evm_tag, proxy_tag, head_ref_branch, skip_pull):
-    if head_ref_branch is not None:
-        neon_evm_tag = update_neon_evm_tag_if_same_branch_exists(head_ref_branch, neon_evm_tag)
+    neon_evm_tag = update_neon_evm_tag_if_same_branch_exists(head_ref_branch, neon_evm_tag)
     neon_evm_image = f'neonlabsorg/evm_loader:{neon_evm_tag}'
     click.echo(f"neon-evm image: {neon_evm_image}")
     neon_test_invoke_program_image = "neonlabsorg/neon_test_invoke_program:develop"
@@ -207,43 +220,14 @@ def destroy_terraform(proxy_tag, run_number):
     terraform.destroy()
 
 
-@cli.command(name="openzeppelin")
-@click.option('--run_number')
-def openzeppelin_test(run_number):
-    container_name = f'fts_{run_number}'
-    fts_threshold = 2370
-    os.environ["FTS_CONTAINER_NAME"] = container_name
-    os.environ["FTS_IMAGE"] = NEON_TESTS_IMAGE
-    os.environ["FTS_USERS_NUMBER"] = '15'
-    os.environ["FTS_JOBS_NUMBER"] = '8'
-    os.environ["NETWORK_NAME"] = f'full-test-suite-{run_number}'
-    os.environ["NETWORK_ID"] = '111'
-    os.environ["REQUEST_AMOUNT"] = '20000'
-    os.environ["USE_FAUCET"] = 'true'
-
-    proxy_ip = os.environ.get("PROXY_IP")
-    solana_ip = os.environ.get("SOLANA_IP")
-
-    os.environ["PROXY_URL"] = f"http://{proxy_ip}:9090/solana"
-    os.environ["FAUCET_URL"] = f"http://{proxy_ip}:3333/request_neon"
-    os.environ["SOLANA_URL"] = f"http://{solana_ip}:8899"
-
-    click.echo(f"Env: {os.environ}")
-    click.echo(f"Running tests....")
-
-    docker_compose("-f docker-compose/docker-compose-full-test-suite.yml pull")
-    fts_result = docker_compose(
-        "-f docker-compose/docker-compose-full-test-suite.yml up")
-    click.echo(fts_result)
-    command = f'docker cp {container_name}:/opt/neon-tests/allure-reports.tar.gz ./'
-    click.echo(f"run command: {command}")
-    subprocess.run(command, shell=True)
-
-    dump_docker_logs(container_name)
+@cli.command(name="get_container_logs")
+def get_all_containers_logs():
     home_path = os.environ.get("HOME")
     artifact_logs = "./logs"
     ssh_key = f"{home_path}/.ssh/ci-stands"
     os.mkdir(artifact_logs)
+    proxy_ip = os.environ.get("PROXY_IP")
+    solana_ip = os.environ.get("SOLANA_IP")
 
     subprocess.run(
         f'ssh-keyscan -H {solana_ip} >> {home_path}/.ssh/known_hosts', shell=True)
@@ -261,60 +245,6 @@ def openzeppelin_test(run_number):
     services = ["postgres", "dbcreation", "indexer", "proxy", "faucet"]
     for service in services:
         upload_remote_logs(ssh_client, service, artifact_logs)
-    dump_docker_logs(container_name)
-    docker_compose(
-        "-f docker-compose/docker-compose-full-test-suite.yml rm -f")
-    check_tests_results(fts_threshold, f"{container_name}.log")
-
-
-def check_tests_results(fts_threshold, log_file):
-    passing_test_count = 0
-    with open(log_file, "r") as file:
-        while True:
-            line = file.readline()
-            if not line:
-                break
-            if re.match(r".*Passing - ", line):
-                passing_test_count = int(line.split('-')[1].strip())
-                break
-    if passing_test_count < fts_threshold:
-        raise RuntimeError(
-            f"Tests failed: Passing - {passing_test_count}\n Threshold - {fts_threshold}")
-
-
-@cli.command(name="basic_tests")
-@click.option('--run_number')
-def run_basic_tests(run_number):
-    click.echo('pull docker images...')
-    out = docker_client.pull(NEON_TESTS_IMAGE, stream=True, decode=True)
-    process_output(out)
-    env = {
-        "PROXY_IP": os.environ.get("PROXY_IP"),
-        "SOLANA_IP": os.environ.get("SOLANA_IP")
-    }
-    container_name = f"basic_tests-{run_number}"
-    docker_client.create_container(NEON_TESTS_IMAGE, command="/bin/bash", name=container_name,
-                                   detach=True, tty=True)
-    docker_client.start(container_name)
-    inst = docker_client.exec_create(
-        container_name, './clickfile.py run basic -n aws --numprocesses 4', environment=env)
-
-    out = docker_client.exec_start(inst['Id'], stream=True)
-    failed_tests = 0
-    for line in out:
-        click.echo(line.decode())
-        if " ERROR " in line.decode() or " FAILED " in line.decode():
-            failed_tests += 1
-    if failed_tests > 0:
-        raise RuntimeError(f"Tests failed! Errors count: {failed_tests}")
-
-
-@cli.command(name="remove_basic_test_container")
-@click.option('--run_number')
-def remove_basic_test_container(run_number):
-    container_name = f"basic_tests-{run_number}"
-    docker_client.stop(container_name)
-    docker_client.remove_container(container_name)
 
 
 def upload_remote_logs(ssh_client, service, artifact_logs):
@@ -503,6 +433,35 @@ def run_uniswap_test():
         raise RuntimeError(f"Uniswap tests failed. Err: {out.stderr}")
 
 
+@cli.command(name="trigger_dapps_tests", help="Run dapps tests workflow")
+@click.option("--solana_ip", help="solana ip")
+@click.option("--proxy_ip", help="proxy ip")
+@click.option('--token', help="github token")
+def trigger_dapps_tests(solana_ip, proxy_ip, token):
+    github = GithubClient(token)
+
+    runs_before = github.get_dapps_runs_list()
+    runs_count_before = github.get_dapps_runs_count()
+    proxy_url = f"http://{proxy_ip}:9090/solana"
+    solana_url = f"http://{solana_ip}:8899/"
+    faucet_url = f"http://{proxy_ip}:3333/"
+
+    github.run_dapps_dispatches(proxy_url, solana_url, faucet_url)
+    wait_condition(lambda: github.get_dapps_runs_count() > runs_count_before)
+
+    runs_after = github.get_dapps_runs_list()
+    run_id = list(set(runs_after) - set(runs_before))[0]
+    link = f"https://github.com/neonlabsorg/neon-tests/actions/runs/{run_id}"
+    click.echo(f"Dapps tests run link: {link}")
+    click.echo("Waiting completed status...")
+    wait_condition(lambda: github.get_dapps_run_info(run_id)["status"] == "completed", timeout_sec=7200, delay=5)
+
+    if github.get_dapps_run_info(run_id)["conclusion"] == "success":
+        click.echo("Dapps tests passed successfully")
+    else:
+        raise RuntimeError(f"Dapps tests failed! See {link}")
+
+
 @cli.command(name="send_notification", help="Send notification to slack")
 @click.option("-u", "--url", help="slack app endpoint url.")
 @click.option("-b", "--build_url", help="github action test build url.")
@@ -518,6 +477,19 @@ def send_notification(url, build_url):
         f"\n<{build_url}|View builosetd details>"
     )
     requests.post(url=url, data=json.dumps(tpl))
+
+
+def wait_condition(func_cond, timeout_sec=60, delay=0.5):
+    start_time = time.time()
+    while True:
+        if time.time() - start_time > timeout_sec:
+            raise RuntimeError(f"The condition not reached within {timeout_sec} sec")
+        try:
+            if func_cond():
+                break
+        except:
+            raise
+        time.sleep(delay)
 
 
 def process_output(output):
