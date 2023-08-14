@@ -44,7 +44,7 @@ LOG = logging.getLogger(__name__)
 class NeonRpcApiPlugin(HttpWebServerBasePlugin):
     """Extend in-built Web Server to add Reverse Proxy capabilities.
     """
-    SOLANA_PROXY_LOCATION: str = r'/solana$'
+    SOLANA_PROXY_LOCATION: str = r'/$'
 
     def __init__(self, *args):
         HttpWebServerBasePlugin.__init__(self, *args)
