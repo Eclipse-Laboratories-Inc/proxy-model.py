@@ -48,7 +48,7 @@ RUN chmod +x /spl/bin/create-test-accounts.sh
 COPY --from=spl /opt/neon-api /spl/bin/neon-core-api
 
 COPY --from=spl \
-    /opt/contracts/contracts/ \
+    /opt/solidity/ \
     /opt/contracts/
 
 COPY --from=neon_test_invoke_program \
