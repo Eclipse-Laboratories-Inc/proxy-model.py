@@ -3,7 +3,7 @@ import logging
 from ..common_neon.emulator_interactor import call_tx_emulator
 from ..common_neon.errors import (
     NonceTooLowError, NonceTooHighError, WrongStrategyError, RescheduleError, BigTxError,
-    NoMoreRetriesError, TxAccountCntTooBig
+    NoMoreRetriesError, TxAccountCntTooBig, BadResourceError
 )
 
 from ..common_neon.data import NeonEmulatorResult
@@ -35,6 +35,7 @@ class NeonTxSendStrategyExecutor:
 
     def execute(self) -> NeonTxResultInfo:
         self._validate_nonce()
+        self._validate_op_balance()
 
         start = self._ctx.strategy_idx
         end = len(self._strategy_list)
@@ -140,3 +141,16 @@ class NeonTxSendStrategyExecutor:
         if self._ctx.state_tx_cnt < self._ctx.neon_tx_info.nonce:
             raise NonceTooHighError(self._ctx.state_tx_cnt)
         raise NonceTooLowError(self._ctx.neon_tx_info.addr, self._ctx.neon_tx_info.nonce, self._ctx.state_tx_cnt)
+
+    def _validate_op_balance(self) -> None:
+        if self._ctx.has_good_sol_tx_receipt():
+            return
+        op_key = self._ctx.signer.pubkey()
+        sol_balance = self._ctx.solana.get_sol_balance(op_key)
+        min_operator_balance_to_err = self._ctx.config.min_operator_balance_to_err
+        if sol_balance <= min_operator_balance_to_err:
+            LOG.error(
+                f'Operator account {str(op_key)} has NOT enough SOLs; balance = {sol_balance}; ' +
+                f'min_operator_balance_to_err = {min_operator_balance_to_err}'
+            )
+            raise BadResourceError(f'Not enough SOLs on the resource {str(op_key)}')
