@@ -1,4 +1,4 @@
-ARG NEON_EVM_COMMIT=latest
+ARG NEON_EVM_COMMIT=v1.5.1
 
 FROM us-central1-docker.pkg.dev/eclipse-362422/eclipse-docker-apps/neon-evm:${NEON_EVM_COMMIT} AS spl
 FROM neonlabsorg/neon_test_invoke_program:develop AS neon_test_invoke_program
@@ -11,17 +11,17 @@ WORKDIR /opt
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive \
-        apt-get install -y \
-            git \
-            software-properties-common \
-            openssl \
-            curl \
-            parallel \
-            netcat-openbsd \
-            ca-certificates \
-            python3-pip \
-            python3-venv \
-            postgresql-client && \
+    apt-get install -y \
+    git \
+    software-properties-common \
+    openssl \
+    curl \
+    parallel \
+    netcat-openbsd \
+    ca-certificates \
+    python3-pip \
+    python3-venv \
+    postgresql-client && \
     python3 -m venv venv && \
     pip3 install --upgrade pip && \
     /bin/bash -c "source venv/bin/activate" && \
