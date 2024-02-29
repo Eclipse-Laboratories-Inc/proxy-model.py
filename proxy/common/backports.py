@@ -8,14 +8,17 @@
     :copyright: (c) 2013-present by Abhinav Singh and contributors.
     :license: BSD, see LICENSE for more details.
 """
+
 import time
 import threading
-from queue import Empty
+from queue import Empty, Full
 from typing import Any, Deque
+
+# Importing collections module for deque
 from collections import deque
 
 
-class cached_property:      # pragma: no cover
+class cached_property:
     """Decorator for read-only properties evaluated only once within TTL period.
     It can be used to create a cached property like this::
 
@@ -58,9 +61,11 @@ class cached_property:      # pragma: no cover
     """
 
     def __init__(self, ttl: float = 0):
+        """cached_property initialization"""
         self.ttl = ttl
 
     def __call__(self, fget: Any, doc: Any = None) -> 'cached_property':
+        """Called when using the decorator"""
         self.fget = fget
         self.__doc__ = doc or fget.__doc__
         self.__name__ = fget.__name__
@@ -68,11 +73,12 @@ class cached_property:      # pragma: no cover
         return self
 
     def __get__(self, inst: Any, owner: Any) -> Any:
+        """Getter method for cached property"""
         now = time.time()
         try:
             value, last_update = inst._cached_properties[self.__name__]
-            if self.ttl > 0 and now - last_update > self.ttl:   # noqa: WPS333
-                raise AttributeError
+            if self.ttl > 0 and now - last_update > self.ttl:
+                raise AttributeError("Cache expired")
         except (KeyError, AttributeError):
             value = self.fget(inst)
             try:
@@ -80,38 +86,91 @@ class cached_property:      # pragma: no cover
             except AttributeError:
                 cache, inst._cached_properties = {}, {}
             finally:
-                cache[self.__name__] = (value, now)  # pylint: disable=E0601
+                cache[self.__name__] = (value, now)
         return value
 
 
 class NonBlockingQueue:
-    '''Simple, unbounded, non-blocking FIFO queue.
+    """Simple, unbounded, non-blocking FIFO queue.
 
     Supports only a single consumer.
 
     NOTE: This is available in Python since 3.7 as SimpleQueue.
     Here because proxy.py still supports 3.6
-    '''
+    """
 
-    def __init__(self) -> None:
+    def __init__(self, maxsize: int = 0) -> None:
+        """NonBlockingQueue initialization"""
         self._queue: Deque[Any] = deque()
+        self._maxsize = maxsize
         self._count: threading.Semaphore = threading.Semaphore(0)
 
-    def put(self, item: Any) -> None:
-        '''Put the item on the queue.'''
+    def put(self, item: Any, block: bool = True, timeout: float = None) -> None:
+        """Put the item on the queue."""
+        if self._maxsize and len(self._queue) >= self._maxsize:
+            if not block:
+                raise Full
+            elif timeout is None:
+                while len(self._queue) >= self._maxsize:
+                    time.sleep(0.1)  # Polling
+            else:
+                end_time = time.time() + timeout
+                while len(self._queue) >= self._maxsize:
+                    remaining_time = end_time - time.time()
+                    if remaining_time <= 0:
+                        raise Full
+                    time.sleep(min(0.1, remaining_time))
         self._queue.append(item)
         self._count.release()
 
-    def get(self) -> Any:
-        '''Remove and return an item from the queue.'''
-        if not self._count.acquire(False, None):
+    def get(self, block: bool = True, timeout: float = None) -> Any:
+        """Remove and return an item from the queue."""
+        if not self._count.acquire(blocking=block, timeout=timeout):
             raise Empty
-        return self._queue.popleft()
+        with self._count._cond:
+            return self._queue.popleft()
 
     def empty(self) -> bool:
-        '''Return True if the queue is empty, False otherwise (not reliable!).'''
-        return len(self._queue) == 0    # pragma: no cover
+        """Return True if the queue is empty, False otherwise (not reliable!)."""
+        return not self._queue
+
+    def full(self) -> bool:
+        """Return True if the queue is full, False otherwise (not reliable!)."""
+        if self._maxsize:
+            return len(self._queue) >= self._maxsize
+        else:
+            return False
 
     def qsize(self) -> int:
-        '''Return the approximate size of the queue (not reliable!).'''
-        return len(self._queue)     # pragma: no cover
+        """Return the approximate size of the queue (not reliable!)."""
+        return len(self._queue)
+
+    def clear(self) -> None:
+        """Clear all items from the queue."""
+        self._queue.clear()
+        # Clearing semaphore counter to make sure it's consistent
+        while self._count.acquire(False):
+            pass
+
+
+# Example usage:
+
+if __name__ == "__main__":
+    # Creating a NonBlockingQueue instance with a maximum size of 5
+    queue = NonBlockingQueue(maxsize=5)
+
+    # Putting items into the queue
+    for i in range(7):
+        try:
+            queue.put(i)
+            print(f"Put {i} into the queue")
+        except Full:
+            print("Queue is full, cannot put more items")
+
+    # Getting items from the queue
+    for _ in range(7):
+        try:
+            item = queue.get()
+            print(f"Got {item} from the queue")
+        except Empty:
+            print("Queue is empty, cannot get more items")
